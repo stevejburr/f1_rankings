@@ -260,7 +260,7 @@ as.data.frame(model_4_coefs$Driver) %>%
   theme_minimal()
 
 
-#model 4 looks good?
+#model 4 looks good
 # prediction curves by driver (for key current ones)
 summary(model_4)
 
@@ -284,24 +284,24 @@ saveRDS(model_5,"model_4.rds")
 
 
 # Model Analysis ----------------------------------------------------------
-
+# Below this point, just rough ideas and notes on things to look at
 
 model_4 <- read_rds("model_4.rds")
 
 unique(all_data$Driver[str_detect(all_data$Driver,"Prost")])
   
-"Lewis Hamilton HAM"
-"Michael Schumacher MSC"
-"Lando Norris NOR"
-"Charles Leclerc LEC"
-"Sebastian Vettel VET"
-"Max Verstappen VER"
-"Nikita Mazepin MAZ"
-"Pastor Maldonado MAL"
-"Nicholas Latifi LAT"
-"Fernando Alonso ALO"
-"Ayrton Senna SEN"
-"Alain Prost PRO"
+# "Lewis Hamilton HAM"
+# "Michael Schumacher MSC"
+# "Lando Norris NOR"
+# "Charles Leclerc LEC"
+# "Sebastian Vettel VET"
+# "Max Verstappen VER"
+# "Nikita Mazepin MAZ"
+# "Pastor Maldonado MAL"
+# "Nicholas Latifi LAT"
+# "Fernando Alonso ALO"
+# "Ayrton Senna SEN"
+# "Alain Prost PRO"
 
 model_4$formula
 
