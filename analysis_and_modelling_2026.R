@@ -5,10 +5,46 @@ library(emmeans)
 library(ggrepel)
 library(marginaleffects)
 
+#
+# Loading required namespace: rstan
+# Joining with `by = join_by(year_chr)`
+# `summarise()` has regrouped the output.
+# ℹ Summaries were computed grouped by Driver and career_year.
+# ℹ Output is grouped by Driver.
+# ℹ Use `summarise(.groups = "drop_last")` to silence this message.
+# ℹ Use `summarise(.by = c(Driver, career_year))` for per-operation grouping (`?dplyr::dplyr_by`) instead.
+# Joining with `by = join_by(Driver, career_year)`
+# `summarise()` has regrouped the output.
+# ℹ Summaries were computed grouped by year_chr, Car, Driver, and career_year.
+# ℹ Output is grouped by year_chr, Car, and Driver.
+# ℹ Use `summarise(.groups = "drop_last")` to silence this message.
+# ℹ Use `summarise(.by = c(year_chr, Car, Driver, career_year))` for per-operation grouping (`?dplyr::dplyr_by`) instead.
+# Error in `validate_newdata()`:
+# ! Levels 'NA_2023', 'NA_2024', 'NA_2025' of grouping factor 'Car:year_chr' cannot be found in the fitted model. Consider setting argument 'allow_new_levels' to TRUE.
+# Run `rlang::last_trace()` to see where the error occurred.
+# Warning messages:
+# 1: There was 1 warning in `mutate()`.
+# ℹ In argument: `pos_points = as.numeric(Pos)`.
+# Caused by warning:
+# ! NAs introduced by coercion 
+# 2: Rows containing NAs were excluded from the model. 
+
 # Data Read ---------------------------------------------------------------
 
 # Read in CSV of all results data
 all_data <- read_csv("all_f1_race_results_14_06_2026.csv")
+
+# 2023+ data was scraped from a different page format and uses different column names.
+# Harmonise before any downstream processing:
+#   Car            <- Team       (Car is NA for 2023+)
+#   Time/Retired   <- Time / Retired  (column name gained a space)
+#   PTS            <- Pts        (column name changed case)
+all_data <- all_data %>%
+  mutate(
+    Car            = coalesce(Car, Team),
+    `Time/Retired` = coalesce(`Time/Retired`, `Time / Retired`),
+    PTS            = coalesce(PTS, as.numeric(Pts))
+  )
 
 
 # Quick Analysis ----------------------------------------------------------
@@ -48,7 +84,7 @@ all_data %>%
 
 all_data %>%
   mutate(finished=if_else(`Time/Retired` %in% c("DNF","DSQ","DNC","DNS") |
-                            `Pos`=="NC",0,1)) %>%
+                            `Pos` %in% c("NC","DQ"),0,1)) %>%
   mutate(pos_points=as.numeric(Pos),
          pos_points=if_else(pos_points<=10,11-pos_points,0),
          pos_points=replace_na(pos_points,0),
