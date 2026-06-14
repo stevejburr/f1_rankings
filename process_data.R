@@ -2,7 +2,7 @@ library(tidyverse)
 
 # convert individual rds files into a single combined DF containing all results and key metrics
 
-all_years <- 1950:2022
+all_years <- 1950:2025
 
 year <- all_years[[1]]
 
@@ -15,15 +15,18 @@ all_data <- map_dfr(all_years,
                                             year,
                                             ".rds"))
           
-          map_dfr(year_data_list,
+        map_dfr(year_data_list,
                   ~{
                     .x %>%
+                      rename_with(~ str_replace_all(., "\\.", "")) %>% # new data has periods
                       mutate(Pos = as.character(Pos)) %>%
                       mutate(Driver=str_remove_all(Driver,"\n"),
                              Driver=str_trim(Driver),
-                             Driver=str_squish(Driver))
+                             Driver=str_squish(Driver)) %>%
+                      mutate(Driver = str_replace(Driver, "([a-z])([A-Z]{3})$", "\\1 \\2")) # in 2026 have concatenated data
                   })
         })
 
 write_csv(all_data,
-          "all_f1_race_results_21_12_22.csv")
+          "all_f1_race_results_14_06_2026.csv")
+

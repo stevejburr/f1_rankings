@@ -4,6 +4,7 @@ library(rvest)
 
 all_years <- 1950:2022
 all_years <- 2022 # update 2022 only
+all_years <- 2023:2025 # update 2022 only
 
 walk(all_years,
      ~{

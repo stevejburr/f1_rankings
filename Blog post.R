@@ -118,6 +118,9 @@ new_data %>%
                        #"Ayrton Senna SEN"
                        NULL)) -> key_driver_trends
 
+
+write_csv(key_driver_trends,"key_driver_trends.csv")
+
 key_driver_trends %>%
   group_by(Driver) %>%
   filter(career_year==max(career_year)) %>%
