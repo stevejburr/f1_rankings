@@ -530,3 +530,82 @@ driver_idx %>%
             colour="red")+
   theme_minimal()
 
+
+# Export Results for Model Comparison -------------------------------------
+# Writes the key fitted quantities of the brms model to model_outputs/ so they
+# can be compared against the PyMC model (see compare_models.R).
+#
+# Everything below is self-contained: it (re)loads model_4 from disk if it is
+# not already in the session, so this block can be sourced on its own.
+
+if (!exists("model_4")) model_4 <- read_rds("model_4_26.rds")
+if (!exists("all_data")) stop("Run the data-prep sections above before exporting.")
+
+export_dir <- "model_outputs"
+dir.create(export_dir, showWarnings = FALSE)
+
+# Drivers with >= 25 races (same qualification cut-off used for ranking plots)
+drivers_qual <- all_data %>%
+  group_by(Driver) %>%
+  summarise(races = n(), .groups = "drop") %>%
+  filter(races >= 25)
+
+# 1. Population-level (fixed) effects --------------------------------------
+as.data.frame(fixef(model_4)) %>%
+  rownames_to_column("term") %>%
+  write_csv(file.path(export_dir, "r_population_params.csv"))
+
+# 2. Driver-level coefficients (posterior summaries per driver) ------------
+as.data.frame(coef(model_4)$Driver) %>%
+  rownames_to_column("Driver") %>%
+  as_tibble() %>%
+  left_join(drivers_qual, by = "Driver") %>%
+  write_csv(file.path(export_dir, "r_driver_coefs.csv"))
+
+# 3. Driver career trajectories in an AVERAGE car --------------------------
+# Car = NA, year_chr = NA marginalises the car-year random effect to its mean,
+# isolating pure driver quality. Predicted on a 1:20 career-year grid.
+career_grid <- 1:20
+traj_newdata <- crossing(
+  Driver      = drivers_qual$Driver,
+  Car         = NA,
+  year_chr    = NA,
+  career_year = career_grid
+)
+traj_preds <- posterior_predict(model_4, newdata = traj_newdata,
+                                allow_new_levels = TRUE)
+traj_newdata$pred_mean <- colMeans(traj_preds)
+traj_newdata$pred_lwr  <- apply(traj_preds, 2, quantile, 0.05)
+traj_newdata$pred_upr  <- apply(traj_preds, 2, quantile, 0.95)
+write_csv(traj_newdata, file.path(export_dir, "r_driver_trajectories.csv"))
+
+# 4. Single-number ability metric -----------------------------------------
+# Expected total_points per race at career_year = 7 (a typical peak) in an
+# average car. This is the common currency for comparing the two models.
+ability_newdata <- crossing(
+  Driver      = drivers_qual$Driver,
+  Car         = NA,
+  year_chr    = NA,
+  career_year = 7
+)
+ability_preds <- posterior_predict(model_4, newdata = ability_newdata,
+                                   allow_new_levels = TRUE)
+ability_newdata$pred_mean <- colMeans(ability_preds)
+ability_newdata$pred_lwr  <- apply(ability_preds, 2, quantile, 0.05)
+ability_newdata$pred_upr  <- apply(ability_preds, 2, quantile, 0.95)
+ability_newdata %>%
+  left_join(drivers_qual, by = "Driver") %>%
+  write_csv(file.path(export_dir, "r_driver_ability.csv"))
+
+# 5. Car-year effects ------------------------------------------------------
+car_newdata <- all_data %>%
+  distinct(Car, year_chr) %>%
+  crossing(career_year = 5, Driver = NA)
+car_preds <- posterior_predict(model_4, newdata = car_newdata,
+                               re_formula = ~ (1 | Car:year_chr),
+                               allow_new_levels = TRUE)
+car_newdata$av_points <- colMeans(car_preds)
+write_csv(car_newdata, file.path(export_dir, "r_car_effects.csv"))
+
+message("brms model outputs written to ", normalizePath(export_dir))
+
