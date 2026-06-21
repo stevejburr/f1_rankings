@@ -166,7 +166,27 @@ model_4 <- brm(total_points ~ 1 + poly(career_year,2) +
                backend="cmdstanr",
                family="poisson")
 saveRDS(model_4,"model_4_26.rds")
+model_all <- model_4
 #model_4 <- read_rds("model_4.rds")
+
+# Up to 2022 Model -----------------------------------------------------------
+all_data_to2022 <- all_data %>% filter(year <= 2022)
+
+drivers_25_to2022 <- all_data_to2022 %>%
+  group_by(Driver) %>%
+  summarise(races=n()) %>%
+  filter(races>=25)
+
+model_to2022 <- brm(total_points ~ 1 + poly(career_year,2) +
+                 (1 + poly(career_year,2)|Driver) +
+                 (1 | Car:year_chr),
+               data=all_data_to2022,
+               chains=4,
+               cores=4,
+               refresh=100,
+               backend="cmdstanr",
+               family="poisson")
+saveRDS(model_to2022,"model_to2022_26.rds")
 
 model_4_coefs <- coef(model_4)
 
@@ -194,7 +214,16 @@ summary(model_4)
 # Model Analysis ----------------------------------------------------------
 # Below this point, just rough ideas and notes on things to look at
 
-model_4 <- read_rds("model_4_26.rds")
+model_4     <- read_rds("model_4_26.rds")
+model_all   <- model_4
+if (!exists("model_to2022")) model_to2022 <- read_rds("model_to2022_26.rds")
+if (!exists("all_data_to2022")) all_data_to2022 <- all_data %>% filter(year <= 2022)
+if (!exists("drivers_25_to2022")) {
+  drivers_25_to2022 <- all_data_to2022 %>%
+    group_by(Driver) %>%
+    summarise(races=n()) %>%
+    filter(races>=25)
+}
 
 unique(all_data$Driver[str_detect(all_data$Driver,"Prost")])
   
@@ -608,4 +637,314 @@ car_newdata$av_points <- colMeans(car_preds)
 write_csv(car_newdata, file.path(export_dir, "r_car_effects.csv"))
 
 message("brms model outputs written to ", normalizePath(export_dir))
+
+
+# Up to 2022 Model Analysis -------------------------------------------------
+# Mirror of the model_4 analysis run on the up to 2022 model alone
+
+if (!exists("model_to2022")) model_to2022 <- read_rds("model_to2022_26.rds")
+if (!exists("model_all"))     model_all     <- read_rds("model_4_26.rds")
+if (!exists("drivers_25_to2022")) {
+  drivers_25_to2022 <- all_data %>%
+    filter(year <= 2022) %>%
+    group_by(Driver) %>%
+    summarise(races = n(), .groups = "drop") %>%
+    filter(races >= 25)
+}
+
+# Driver intercept ranking from up to 2022 model
+coef_to2022 <- coef(model_to2022)
+
+as.data.frame(coef_to2022$Driver) %>%
+  rownames_to_column() %>%
+  as_tibble() %>%
+  inner_join(drivers_25_to2022, by = c("rowname" = "Driver")) %>%
+  arrange(-Estimate.Intercept) %>%
+  head(35) %>%
+  mutate(rowname = fct_reorder(rowname, Estimate.Intercept)) %>%
+  ggplot(aes(y = rowname,
+             xmin = Q2.5.Intercept,
+             xmax = Q97.5.Intercept,
+             x = Estimate.Intercept)) +
+  geom_pointrange() +
+  theme_minimal() +
+  labs(title = "Top 35 drivers by intercept: up to 2022 model")
+
+# Career trajectories for key drivers: up to 2022 model
+key_drivers_hist <- c("Lewis Hamilton HAM",
+                      "Michael Schumacher MSC",
+                      "Sebastian Vettel VET",
+                      "Max Verstappen VER",
+                      "Fernando Alonso ALO",
+                      "Ayrton Senna SEN",
+                      "Alain Prost PRO")
+
+traj_nd_to2022 <- crossing(Driver      = key_drivers_hist,
+                             Car         = NA,
+                             year_chr    = NA,
+                             career_year = 1:10)
+
+traj_preds_to2022 <- posterior_predict(model_to2022,
+                                        newdata = traj_nd_to2022,
+                                        allow_new_levels = TRUE)
+traj_nd_to2022$predicted_points <- colMeans(traj_preds_to2022)
+
+traj_nd_to2022 %>%
+  ggplot() +
+  geom_line(aes(x = career_year, y = predicted_points, colour = Driver),
+            show.legend = FALSE) +
+  geom_text_repel(data = traj_nd_to2022 %>% filter(career_year == 10),
+                  aes(x = career_year, y = predicted_points,
+                      colour = Driver, label = Driver),
+                  hjust = "left", direction = "y", show.legend = FALSE) +
+  coord_cartesian(xlim = c(0, 15)) +
+  theme_minimal() +
+  labs(title = "Career trajectories: up to 2022 model")
+
+
+# Model Comparison: up to 2022 vs All Years ---------------------------------
+
+drivers_qual_to2022_vec <- all_data %>%
+  filter(year <= 2022) %>%
+  group_by(Driver) %>%
+  summarise(races = n(), .groups = "drop") %>%
+  filter(races >= 25) %>%
+  pull(Driver)
+
+drivers_qual_all_vec <- all_data %>%
+  group_by(Driver) %>%
+  summarise(races = n(), .groups = "drop") %>%
+  filter(races >= 25) %>%
+  pull(Driver)
+
+drivers_common <- intersect(drivers_qual_to2022_vec, drivers_qual_all_vec)
+
+# Ability at career_year=7 for both models across the common driver set
+comp_nd <- crossing(Driver = drivers_common, Car = NA, year_chr = NA, career_year = 7)
+
+comp_preds_to2022 <- posterior_predict(model_to2022, newdata = comp_nd, allow_new_levels = TRUE)
+comp_preds_all <- posterior_predict(model_all,     newdata = comp_nd, allow_new_levels = TRUE)
+
+comparison_df <- comp_nd %>%
+  mutate(
+    pred_to2022 = colMeans(comp_preds_to2022),
+    pred_all     = colMeans(comp_preds_all),
+    lwr_to2022  = apply(comp_preds_to2022, 2, quantile, 0.05),
+    upr_to2022  = apply(comp_preds_to2022, 2, quantile, 0.95),
+    lwr_all      = apply(comp_preds_all, 2, quantile, 0.05),
+    upr_all      = apply(comp_preds_all, 2, quantile, 0.95),
+    rank_to2022 = rank(-pred_to2022),
+    rank_all     = rank(-pred_all),
+    rank_change  = rank_to2022 - rank_all,
+    ability_change = pred_all - pred_to2022
+  )
+
+# Top 40 by all-years rank with rank movement
+comparison_df %>%
+  arrange(rank_all) %>%
+  select(Driver, rank_to2022, rank_all, rank_change, pred_to2022, pred_all, ability_change) %>%
+  print(n = 40)
+
+# Biggest rank movers
+comparison_df %>%
+  arrange(-abs(rank_change)) %>%
+  select(Driver, rank_to2022, rank_all, rank_change, ability_change) %>%
+  print(n = 15)
+
+# Scatter: ability up to 2022 vs all-years
+comparison_df %>%
+  ggplot(aes(x = pred_to2022, y = pred_all)) +
+  geom_point(alpha = 0.6) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", colour = "grey50") +
+  geom_text_repel(
+    data = comparison_df %>% filter(rank_all <= 20 | abs(rank_change) >= 5),
+    aes(label = Driver), size = 2.5
+  ) +
+  theme_minimal() +
+  labs(title = "Driver ability: up to 2022 model vs all-years model",
+       subtitle = "Drivers above the diagonal improved their estimate with additional data",
+       x = "Up to 2022 model (predicted points, career year 7)",
+       y = "All-years model (predicted points, career year 7)")
+
+# Bump chart: rank shifts for top 30
+bump_labels <- comparison_df %>%
+  filter(rank_all <= 30 | rank_to2022 <= 30) %>%
+  select(Driver, rank_to2022, rank_all) %>%
+  pivot_longer(c(rank_to2022, rank_all), names_to = "model", values_to = "rank") %>%
+  mutate(model = factor(model,
+                        levels = c("rank_to2022", "rank_all"),
+                        labels = c("Up to 2022", "All years"))) %>%
+  filter(model == "All years")
+
+comparison_df %>%
+  filter(rank_all <= 30 | rank_to2022 <= 30) %>%
+  select(Driver, rank_to2022, rank_all) %>%
+  pivot_longer(c(rank_to2022, rank_all), names_to = "model", values_to = "rank") %>%
+  mutate(model = factor(model,
+                        levels = c("rank_to2022", "rank_all"),
+                        labels = c("Up to 2022", "All years"))) %>%
+  ggplot(aes(x = model, y = rank, group = Driver, colour = Driver)) +
+  geom_line(alpha = 0.7) +
+  geom_point() +
+  scale_y_reverse(breaks = 1:30) +
+  geom_text_repel(data = bump_labels,
+                  aes(label = Driver), hjust = "left", size = 2.5,
+                  show.legend = FALSE) +
+  theme_minimal() +
+  theme(legend.position = "none") +
+  labs(title = "Driver ranking shifts: up to 2022 vs all-years model",
+       x = NULL, y = "Rank")
+
+# Trajectory comparison for key historical drivers
+traj_comp_nd <- crossing(Driver      = key_drivers_hist,
+                          Car         = NA,
+                          year_chr    = NA,
+                          career_year = 1:12)
+
+traj_comp_preds_to2022 <- posterior_predict(model_to2022, newdata = traj_comp_nd,
+                                          allow_new_levels = TRUE)
+traj_comp_preds_all <- posterior_predict(model_all,     newdata = traj_comp_nd,
+                                          allow_new_levels = TRUE)
+
+traj_comp_nd %>%
+  mutate(pred_to2022 = colMeans(traj_comp_preds_to2022),
+         pred_all     = colMeans(traj_comp_preds_all)) %>%
+  pivot_longer(c(pred_to2022, pred_all),
+               names_to = "model", values_to = "pred",
+               names_prefix = "pred_") %>%
+  mutate(model = factor(model,
+                        levels = c("to2022", "all"),
+                        labels = c("Up to 2022 model", "All years model"))) %>%
+  ggplot(aes(x = career_year, y = pred, colour = model)) +
+  geom_line() +
+  facet_wrap(~Driver, scales = "free_y") +
+  theme_minimal() +
+  labs(title = "Career trajectory comparison: up to 2022 vs all-years model",
+       x = "Career year", y = "Predicted points per race", colour = "Model")
+
+
+# 2022+ Drivers: Impact of Additional Data --------------------------------
+# Tracks drivers present from 2022 onwards and how their estimates
+# changed between the up to 2022 model and the full all-years model.
+
+drivers_2022plus <- all_data %>%
+  filter(year >= 2022) %>%
+  distinct(Driver) %>%
+  inner_join(
+    all_data %>%
+      group_by(Driver) %>%
+      summarise(races = n(), .groups = "drop") %>%
+      filter(races >= 25),
+    by = "Driver"
+  ) %>%
+  pull(Driver)
+
+# Drivers with enough up to 2022 data to appear in both models
+drivers_2022plus_both_models <- intersect(drivers_2022plus, drivers_qual_to2022_vec)
+
+# Career trajectories for 2022+ drivers from the all-years model
+max_career_2022plus <- all_data %>%
+  filter(Driver %in% drivers_2022plus) %>%
+  group_by(Driver) %>%
+  summarise(max_career = max(career_year), .groups = "drop")
+
+traj_nd_2022plus <- crossing(Driver      = drivers_2022plus,
+                              Car         = NA,
+                              year_chr    = NA,
+                              career_year = 1:20) %>%
+  inner_join(max_career_2022plus, by = "Driver") %>%
+  filter(career_year <= max_career) %>%
+  select(-max_career)
+
+preds_traj_2022plus_all <- posterior_predict(model_all, newdata = traj_nd_2022plus,
+                                              allow_new_levels = TRUE)
+traj_nd_2022plus$pred_all <- colMeans(preds_traj_2022plus_all)
+
+# For drivers in both models, get their up to 2022 trajectories
+traj_nd_2022plus_both <- traj_nd_2022plus %>%
+  filter(Driver %in% drivers_2022plus_both_models) %>%
+  select(-pred_all)
+
+preds_traj_2022plus_to2022 <- posterior_predict(model_to2022,
+                                              newdata = traj_nd_2022plus_both,
+                                              allow_new_levels = TRUE)
+traj_nd_2022plus_both$pred_to2022 <- colMeans(preds_traj_2022plus_to2022)
+
+# Trajectory comparison: how 2022+ data reshaped estimates for veterans
+traj_nd_2022plus %>%
+  filter(Driver %in% drivers_2022plus_both_models) %>%
+  left_join(traj_nd_2022plus_both %>% select(Driver, career_year, pred_to2022),
+            by = c("Driver", "career_year")) %>%
+  pivot_longer(c(pred_all, pred_to2022),
+               names_to = "model", values_to = "pred",
+               names_prefix = "pred_") %>%
+  filter(!is.na(pred)) %>%
+  mutate(model = factor(model,
+                        levels = c("to2022", "all"),
+                        labels = c("Up to 2022 model", "All years model"))) %>%
+  ggplot(aes(x = career_year, y = pred, colour = model)) +
+  geom_line() +
+  facet_wrap(~Driver, scales = "free_y") +
+  theme_minimal() +
+  labs(title = "Drivers in 2022+: how career estimates shifted with new data",
+       subtitle = "Only drivers appearing in both models shown",
+       x = "Career year", y = "Predicted points per race", colour = "Model")
+
+# All 2022+ drivers: ability at career_year=7 from all-years model
+ability_nd_2022plus <- crossing(Driver      = drivers_2022plus,
+                                 Car         = NA,
+                                 year_chr    = NA,
+                                 career_year = 7)
+preds_ability_2022plus_all <- posterior_predict(model_all,
+                                                 newdata = ability_nd_2022plus,
+                                                 allow_new_levels = TRUE)
+ability_nd_2022plus <- ability_nd_2022plus %>%
+  mutate(pred_mean = colMeans(preds_ability_2022plus_all),
+         pred_lwr  = apply(preds_ability_2022plus_all, 2, quantile, 0.05),
+         pred_upr  = apply(preds_ability_2022plus_all, 2, quantile, 0.95))
+
+ability_nd_2022plus %>%
+  mutate(Driver = fct_reorder(Driver, pred_mean)) %>%
+  ggplot(aes(y = Driver, x = pred_mean, xmin = pred_lwr, xmax = pred_upr)) +
+  geom_pointrange() +
+  theme_minimal() +
+  labs(title = "2022+ era drivers: ability ranking (all-years model)",
+       subtitle = "Predicted points per race at career year 7, average car",
+       x = "Predicted points", y = NULL)
+
+# Ability change: compare up to 2022 estimate vs all-years estimate
+ability_nd_2022plus_both <- crossing(Driver      = drivers_2022plus_both_models,
+                                      Car         = NA,
+                                      year_chr    = NA,
+                                      career_year = 7)
+preds_ability_2022plus_to2022 <- posterior_predict(model_to2022,
+                                                 newdata = ability_nd_2022plus_both,
+                                                 allow_new_levels = TRUE)
+
+ability_change_2022plus <- ability_nd_2022plus_both %>%
+  mutate(pred_mean_to2022 = colMeans(preds_ability_2022plus_to2022)) %>%
+  left_join(ability_nd_2022plus %>% select(Driver, pred_mean_all = pred_mean),
+            by = "Driver") %>%
+  mutate(ability_change = pred_mean_all - pred_mean_to2022,
+         rank_to2022   = rank(-pred_mean_to2022),
+         rank_all       = rank(-pred_mean_all),
+         rank_change    = rank_to2022 - rank_all)
+
+ability_change_2022plus %>%
+  arrange(rank_all) %>%
+  select(Driver, rank_to2022, rank_all, rank_change,
+         pred_mean_to2022, pred_mean_all, ability_change) %>%
+  print(n = 30)
+
+ability_change_2022plus %>%
+  mutate(Driver = fct_reorder(Driver, ability_change)) %>%
+  ggplot(aes(y = Driver, x = ability_change, fill = ability_change > 0)) +
+  geom_col() +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  scale_fill_manual(values = c("TRUE" = "steelblue", "FALSE" = "tomato"),
+                    guide = "none") +
+  theme_minimal() +
+  labs(title = "2022+ drivers: change in ability estimate after including post-2021 data",
+       subtitle = "Positive = rated higher with more data; Negative = rated lower",
+       x = "Change in predicted points (all-years minus up to 2022 model)", y = NULL)
 
